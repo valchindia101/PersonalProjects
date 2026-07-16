@@ -1,0 +1,67 @@
+data_dir = "/var/lib/vector"
+
+# ── SOURCES ─────────────────────────────────────────────
+
+[sources.cisco_syslog]
+type = "syslog"
+address = "0.0.0.0:514"
+mode = "udp"
+
+[sources.flow_file]
+type = "file"
+include = ["/data/flows.log"]
+read_from = "end"
+
+# ── TRANSFORMS ──────────────────────────────────────────
+
+[transforms.syslog_normalize]
+type = "remap"
+inputs = ["cisco_syslog"]
+source = '''
+.host = to_string(.hostname) ?? "unknown"
+.severity = to_string(.severity) ?? "info"
+.facility = to_string(.facility) ?? "unknown"
+.message = to_string(.message) ?? ""
+. = {"ts": now(), "host": .host, "severity": .severity, "facility": .facility, "message": .message}
+'''
+
+[transforms.flow_parse]
+type = "remap"
+inputs = ["flow_file"]
+source = '''
+parsed, err = parse_json(.message)
+if err != null {
+  abort
+}
+. = {
+  "ts": now(),
+  "src_addr": to_string(parsed.SrcAddr) ?? "",
+  "dst_addr": to_string(parsed.DstAddr) ?? "",
+  "src_port": to_int(parsed.SrcPort) ?? 0,
+  "dst_port": to_int(parsed.DstPort) ?? 0,
+  "proto": to_int(parsed.Proto) ?? 0,
+  "in_if": to_int(parsed.InIf) ?? 0,
+  "out_if": to_int(parsed.OutIf) ?? 0,
+  "bytes": to_int(parsed.Bytes) ?? 0,
+  "packets": to_int(parsed.Packets) ?? 0,
+  "sampler_address": to_string(parsed.SamplerAddress) ?? ""
+}
+'''
+
+# ── SINKS ───────────────────────────────────────────────
+
+[sinks.clickhouse_syslog]
+type = "clickhouse"
+inputs = ["syslog_normalize"]
+endpoint = "http://clickhouse:8123"
+database = "netmon"
+table = "syslog"
+skip_unknown_fields = true
+
+[sinks.clickhouse_flows]
+type = "clickhouse"
+inputs = ["flow_parse"]
+endpoint = "http://clickhouse:8123"
+database = "netmon"
+table = "flows"
+skip_unknown_fields = true

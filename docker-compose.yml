@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: netmon-clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"   # HTTP interface (Grafana + Vector use this)
+      - "9000:9000"   # native client (for manual queries via clickhouse-client)
+    volumes:
+      - ch_data:/var/lib/clickhouse
+      - ./clickhouse-init:/docker-entrypoint-initdb.d   # auto-runs .sql files on first start
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  goflow2:
+    image: netsampler/goflow2:latest
+    container_name: netmon-goflow2
+    restart: unless-stopped
+    ports:
+      - "2055:2055/udp"   # NetFlow v9 listener — matches "flow exporter" config on the 2911
+    command:
+      - "-listen=netflow://0.0.0.0:2055"
+      - "-format=json"
+      - "-transport=file"
+      - "-transport.file.path=/data/flows.log"
+    volumes:
+      - flow_data:/data
+
+  vector:
+    image: timberio/vector:0.39.0-alpine
+    container_name: netmon-vector
+    restart: unless-stopped
+    ports:
+      - "514:514/udp"   # syslog listener — matches "logging host" config on the 2911
+    volumes:
+      - ./vector/vector.toml:/etc/vector/vector.toml:ro
+      - flow_data:/data:ro
+    depends_on:
+      - clickhouse
+      - goflow2
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: netmon-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - clickhouse
+
+volumes:
+  ch_data:
+  flow_data:
+  grafana_data:
